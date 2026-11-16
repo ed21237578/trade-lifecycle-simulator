@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trade Lifecycle Simulator</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #171e26; --line: #26313d; --text: #e6edf3; --muted: #8b98a5;
+    --buy: #2ecc8f; --sell: #ff6b6b; --accent: #5aa9ff; --warn: #f5b84b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .status { font-size: 12px; color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+  .dot.up { background: var(--buy); } .dot.down { background: var(--sell); }
+  main { padding: 16px 20px; display: grid; gap: 16px; grid-template-columns: repeat(12, 1fr); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+  .stats { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+  .stat .v { font-size: 22px; font-weight: 600; font-family: var(--mono); }
+  .stat .l { font-size: 12px; color: var(--muted); }
+  .book { grid-column: span 4; } .trades { grid-column: span 4; } .breaks { grid-column: span 4; }
+  @media (max-width: 1000px) { .book, .trades, .breaks { grid-column: 1 / -1; } }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
+  th { text-align: right; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  td { text-align: right; padding: 3px 6px; position: relative; }
+  th:first-child, td:first-child { text-align: left; }
+  .buy { color: var(--buy); } .sell { color: var(--sell); } .warn { color: var(--warn); }
+  .bar { position: absolute; top: 2px; bottom: 2px; right: 0; opacity: .14; border-radius: 3px; }
+  .bar.buy { background: var(--buy); } .bar.sell { background: var(--sell); }
+  .spread { text-align: center; color: var(--muted); padding: 6px 0; font-family: var(--mono); font-size: 12px; border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); margin: 4px 0; }
+  select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  .scroll { max-height: 420px; overflow-y: auto; }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: rgba(245,184,75,.12); color: var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Trade Lifecycle Simulator</h1>
+  <div class="status">
+    <span><span class="dot" id="engineDot"></span>Matching engine</span>
+    &nbsp;&nbsp;
+    <span><span class="dot" id="settleDot"></span>Settlement</span>
+    &nbsp;&nbsp;
+    <label>Symbol <select id="symbol"></select></label>
+  </div>
+</header>
+
+<main>
+  <section class="panel stats" aria-label="Key numbers">
+    <div class="stat"><div class="v" id="sOrders">0</div><div class="l">Orders received</div></div>
+    <div class="stat"><div class="v" id="sTrades">0</div><div class="l">Trades executed</div></div>
+    <div class="stat"><div class="v" id="sShares">0</div><div class="l">Shares traded</div></div>
+    <div class="stat"><div class="v" id="sMatch">100%</div><div class="l">Reconciliation match rate</div></div>
+    <div class="stat"><div class="v warn" id="sBreaks">0</div><div class="l">Open breaks</div></div>
+  </section>
+
+  <section class="panel book">
+    <h2>Order book</h2>
+    <table><thead><tr><th>Side</th><th>Price</th><th>Quantity</th></tr></thead><tbody id="asks"></tbody></table>
+    <div class="spread" id="spread">Spread: n/a</div>
+    <table><tbody id="bids"></tbody></table>
+  </section>
+
+  <section class="panel trades">
+    <h2>Recent trades</h2>
+    <div class="scroll">
+      <table><thead><tr><th>Time</th><th>Price</th><th>Qty</th><th>Buyer / Seller</th></tr></thead><tbody id="tradeRows"></tbody></table>
+      <div class="empty" id="noTrades">Waiting for trades. Start the bot to generate orders.</div>
+    </div>
+  </section>
+
+  <section class="panel breaks">
+    <h2>Reconciliation breaks</h2>
+    <div class="scroll">
+      <table><thead><tr><th>Trade</th><th>Type</th><th>Exchange</th><th>Custodian</th></tr></thead><tbody id="breakRows"></tbody></table>
+      <div class="empty" id="noBreaks">No breaks. Exchange and custodian records agree.</div>
+    </div>
+  </section>
+</main>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const ENGINE = params.get("engine") || location.origin;
+  const SETTLEMENT = params.get("settlement") || `${location.protocol}//${location.hostname}:8001`;
+  const state = { symbol: null, trades: [], lastTradeId: 0 };
+
+  const $ = id => document.getElementById(id);
+  const pounds = p => "£" + (p / 100).toFixed(2);
+  const num = n => Number(n).toLocaleString("en-GB");
+
+  // Builds table cells with textContent only, so data from the API can never inject HTML.
+  function row(cells, cls) {
+    const tr = document.createElement("tr");
+    for (const c of cells) {
+      const td = document.createElement("td");
+      if (c instanceof Node) td.appendChild(c); else td.textContent = c;
+      tr.appendChild(td);
+    }
+    if (cls) tr.className = cls;
+    return tr;
+  }
+
+  async function getJson(url) {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    return r.json();
+  }
+
+  async function loadSymbols() {
+    const symbols = await getJson(`${ENGINE}/api/symbols`);
+    const sel = $("symbol");
+    for (const s of symbols) sel.add(new Option(s, s));
+    state.symbol = symbols[0];
+    sel.onchange = () => { state.symbol = sel.value; renderTrades(); refreshBook(); };
+  }
+
+  function renderLevels(tbodyId, levels, side, max) {
+    const body = $(tbodyId);
+    body.replaceChildren();
+    for (const [price, qty] of levels) {
+      const bar = document.createElement("div");
+      bar.className = `bar ${side}`;
+      bar.style.width = `${Math.max(4, (qty / max) * 100)}%`;
+      const qtyCell = document.createElement("span");
+      qtyCell.textContent = num(qty);
+      const tr = row([side === "buy" ? "Bid" : "Ask", pounds(price), ""], side);
+      tr.lastChild.append(bar, qtyCell);
+      body.appendChild(tr);
+    }
+  }
+
+  async function refreshBook() {
+    if (!state.symbol) return;
+    const book = await getJson(`${ENGINE}/api/book?symbol=${encodeURIComponent(state.symbol)}`);
+    // JavaScript objects re-sort numeric keys, so sort explicitly: best prices closest to the spread.
+    const levels = obj => Object.entries(obj).map(([p, q]) => [Number(p), q]);
+    const asks = levels(book.asks).sort((a, b) => a[0] - b[0]).slice(0, 10).reverse();
+    const bids = levels(book.bids).sort((a, b) => b[0] - a[0]).slice(0, 10);
+    const max = Math.max(1, ...asks.map(l => l[1]), ...bids.map(l => l[1]));
+    renderLevels("asks", asks, "sell", max);
+    renderLevels("bids", bids, "buy", max);
+    $("spread").textContent = book.bestBid && book.bestAsk
+      ? `Spread: ${pounds(book.bestAsk - book.bestBid)}`
+      : "Spread: n/a";
+  }
+
+  async function refreshTrades() {
+    const fresh = await getJson(`${ENGINE}/api/trades?since=${state.lastTradeId}`);
+    if (fresh.length) {
+      state.trades.push(...fresh);
+      state.trades = state.trades.slice(-2000);
+      state.lastTradeId = fresh[fresh.length - 1].tradeId;
+      renderTrades();
+    }
+  }
+
+  function renderTrades() {
+    const rows = state.trades.filter(t => t.symbol === state.symbol).slice(-40).reverse();
+    const body = $("tradeRows");
+    body.replaceChildren(...rows.map(t => row([
+      new Date(t.timestampMillis).toLocaleTimeString("en-GB"),
+      pounds(t.pricePence), num(t.quantity), `${t.buyerId} / ${t.sellerId}`
+    ])));
+    $("noTrades").style.display = rows.length ? "none" : "block";
+  }
+
+  async function refreshHealth() {
+    try {
+      const h = await getJson(`${ENGINE}/health`);
+      $("engineDot").className = "dot up";
+      $("sOrders").textContent = num(h.ordersReceived);
+      $("sTrades").textContent = num(h.tradesExecuted);
+      $("sShares").textContent = num(h.sharesTraded);
+    } catch { $("engineDot").className = "dot down"; }
+  }
+
+  async function refreshBreaks() {
+    try {
+      const data = await getJson(`${SETTLEMENT}/breaks`);
+      $("settleDot").className = "dot up";
+      $("sMatch").textContent = (data.summary.matchRate * 100).toFixed(1) + "%";
+      $("sBreaks").textContent = num(data.summary.tradesWithBreaks);
+      const rows = data.breaks.slice(-40).reverse().map(b => {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = b.break_type.replaceAll("_", " ").toLowerCase();
+        return row(["#" + b.trade_id, tag, b.exchange_value ?? "missing", b.custodian_value ?? "missing"]);
+      });
+      $("breakRows").replaceChildren(...rows);
+      $("noBreaks").style.display = rows.length ? "none" : "block";
+    } catch { $("settleDot").className = "dot down"; }
+  }
+
+  async function tick() {
+    try { await Promise.all([refreshBook(), refreshTrades()]); } catch { /* engine down, health shows it */ }
+    refreshHealth();
+    refreshBreaks();
+  }
+
+  loadSymbols().then(() => { tick(); setInterval(tick, 1000); })
+    .catch(() => { $("engineDot").className = "dot down"; });
+</script>
+</body>
+</html>
