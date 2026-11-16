@@ -2,7 +2,7 @@
 
 A small trading and settlement platform that follows a trade from the moment an order is placed to the moment the bank checks it is correct.
 
-![CI](https://github.com/YOUR-GITHUB/trade-lifecycle-simulator/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/ed21237578/trade-lifecycle-simulator/actions/workflows/ci.yml/badge.svg)
 
 ## What it does
 
