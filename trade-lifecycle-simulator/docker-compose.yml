@@ -1,0 +1,30 @@
+# Starts the whole system with one command:  docker compose up --build
+# Then open http://localhost:8080 for the dashboard.
+services:
+  matching-engine:
+    build: ./matching-engine
+    ports:
+      - "8080:8080"
+    environment:
+      API_KEY: ${API_KEY:-change-me}
+
+  settlement:
+    build: ./settlement
+    ports:
+      - "8001:8001"
+    environment:
+      ENGINE_URL: http://matching-engine:8080
+      ERROR_RATE: "0.05"
+      POLL_SECONDS: "2"
+    depends_on:
+      - matching-engine
+
+  trading-bot:
+    build: ./trading-bot
+    environment:
+      ENGINE_URL: http://matching-engine:8080
+      API_KEY: ${API_KEY:-change-me}
+      ORDERS_PER_SECOND: "5"
+    depends_on:
+      - matching-engine
+    restart: on-failure
